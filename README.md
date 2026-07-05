@@ -12,6 +12,8 @@ a real-time head tracker on Windows.
 > **Unofficial** open-source Windows bridge. Not affiliated with or endorsed by
 > Sony.
 
+https://github.com/user-attachments/assets/851e4ff7-3134-45e9-90b4-a0fa42258730
+
 Sony Head Tracker connects to the Android Head Tracker sensor exposed by
 supported Sony Bluetooth devices, reads live orientation and gyroscope data, and
 sends yaw, pitch, and roll to [OpenTrack](https://github.com/opentrack/opentrack)
