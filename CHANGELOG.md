@@ -6,6 +6,55 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-07-09
+
+Performance release. The per-packet hot path and the GUI were made faster and
+lighter with **no change to behaviour or output**: every produced byte, decoded
+sensor value, UI string, port, and the OpenTrack/JSON wire format is identical to
+2.0.0, and all 41 unit tests still pass. A local benchmark harness with built-in
+equivalence checks was added to prove and guard this.
+
+### Changed
+- **Faster JSON telemetry serialisation.** The JSON datagram is now built with
+  `std::to_chars` appends into a reused buffer instead of a per-packet
+  `std::format` call with two intermediate string allocations, and the gyroscope
+  vector is formatted once and reused for its deprecated `angularVelocity` alias.
+  Output is byte-for-byte identical (verified against the previous implementation
+  over a randomized sample corpus); roughly 3× faster in local benchmarks.
+- **Lower-overhead UDP output.** The JSON destination address is computed once at
+  `open()` and one serialisation buffer is reused per `send()`, removing a
+  per-packet address rebuild and heap allocation. Both datagrams, their bytes, and
+  their destinations are unchanged.
+- **Faster HID packet decoding.** Packed descriptor fields are read with a
+  little-endian word assembly instead of a per-bit loop, and the HID
+  unit-exponent powers of ten are cached, so decoded values are bit-identical
+  while decoding is roughly 4× faster locally. The HID reader thread now reuses
+  scratch buffers, so the per-packet parse loop no longer allocates.
+- **Cheaper GUI under load.** Visible yaw/pitch/roll, motion, and raw-packet text
+  is now *formatted* at the display refresh rate (10 Hz, raw 5 Hz) from the newest
+  sample, rather than formatted on every packet and only throttled at draw time,
+  so the GUI thread does progressively less work as the packet rate rises. The
+  double-buffered window paint caches its back-buffer bitmap across frames
+  (rebuilt on resize) and blits only the invalidated region, instead of
+  allocating a window-sized bitmap on every repaint. The visible result is
+  identical, including the existing flicker-free graph.
+
+### Added
+- **Local benchmark harness** (`bench/`, built and run by `build-bench.cmd`) that
+  times the per-packet hot path against a simulated packet source (no headset
+  required) and, on every run, verifies that decoded values stay bit-identical and
+  the JSON output stays byte-identical to reference implementations. A
+  `performance_optimization_report.md` records the before/after measurements and
+  methodology.
+- Two additive internal helpers used by the above (`toJsonTo`,
+  `decodePackedDescriptorValuesInto`); no existing function was changed or removed.
+
+### Compatibility
+- No functional change. OpenTrack UDP on port 4242, JSON telemetry on port 4243,
+  the JSON schema and its exact bytes, sensor parsing, orientation/filter/axis
+  math, supported devices, GUI text and behaviour, and repair/probe/bridge
+  behaviour are all unchanged.
+
 ## [2.0.0] - 2026-07-04
 
 ### Added
@@ -245,7 +294,8 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   filtering with recenter and drift correction, OpenTrack + JSON UDP output,
   diagnostics GUI, and one-click driver-only "Repair Tracker" recovery.
 
-[Unreleased]: https://github.com/NicholasSlattery/sony-head-tracker/compare/v2.0.0...HEAD
+[Unreleased]: https://github.com/NicholasSlattery/sony-head-tracker/compare/v2.1.0...HEAD
+[2.1.0]: https://github.com/NicholasSlattery/sony-head-tracker/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/NicholasSlattery/sony-head-tracker/compare/v1.4.0...v2.0.0
 [1.4.0]: https://github.com/NicholasSlattery/sony-head-tracker/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/NicholasSlattery/sony-head-tracker/compare/v1.2.0...v1.3.0

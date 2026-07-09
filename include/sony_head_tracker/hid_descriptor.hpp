@@ -16,6 +16,9 @@ double descriptorScale(std::int64_t raw, std::int32_t logicalMin, std::int32_t l
                        std::int32_t physicalMin, std::int32_t physicalMax, std::int8_t unitExponent);
 std::int8_t decodeHidUnitExponent(std::uint32_t exponent);
 std::vector<double> decodePackedDescriptorValues(std::span<const std::uint8_t> packed, const DescriptorField& field);
+// Same decoding into a caller-owned vector (cleared first), so the per-packet
+// read loop can reuse one allocation. decodePackedDescriptorValues() wraps this.
+void decodePackedDescriptorValuesInto(std::vector<double>& result, std::span<const std::uint8_t> packed, const DescriptorField& field);
 // Sign-extends the low `bytes*8` bits of `value` (HID descriptor items store
 // signed minimums/maximums as variable-width little-endian integers).
 std::int64_t hidSigned(std::uint32_t value, unsigned bytes);

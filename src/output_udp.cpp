@@ -23,6 +23,9 @@ bool UdpOutput::open(std::string host, std::uint16_t port) {
     destination_.sin_family = AF_INET;
     destination_.sin_port = htons(port);
     if (inet_pton(AF_INET, host.c_str(), &destination_.sin_addr) != 1) { close(); return false; }
+    // The JSON datagram always goes to port+1; precompute its address once.
+    jsonDestination_ = destination_;
+    jsonDestination_.sin_port = htons(static_cast<u_short>(port + 1));
     port_ = port;
     return true;
 }
@@ -42,9 +45,8 @@ void UdpOutput::send(const MotionSample& s) {
     sendto(socket_, reinterpret_cast<const char*>(openTrack.data()), static_cast<int>(openTrack.size() * sizeof(double)), 0,
            reinterpret_cast<const sockaddr*>(&destination_), sizeof(destination_));
     // The JSON datagram follows immediately on port+1 so consumers never need packet sniffing to distinguish formats.
-    const auto json = toJson(s, deviceJson_);
-    auto jsonDest = destination_; jsonDest.sin_port = htons(static_cast<u_short>(ntohs(destination_.sin_port) + 1));
-    sendto(socket_, json.data(), static_cast<int>(json.size()), 0, reinterpret_cast<const sockaddr*>(&jsonDest), sizeof(jsonDest));
+    toJsonTo(jsonBuffer_, s, deviceJson_);
+    sendto(socket_, jsonBuffer_.data(), static_cast<int>(jsonBuffer_.size()), 0, reinterpret_cast<const sockaddr*>(&jsonDestination_), sizeof(jsonDestination_));
     ++packetsSent_;
 }
 

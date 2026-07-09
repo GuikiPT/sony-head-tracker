@@ -30,7 +30,9 @@ public:
 private:
     SOCKET socket_{INVALID_SOCKET};
     sockaddr_in destination_{};
+    sockaddr_in jsonDestination_{};   // destination_ with port+1, computed once in open()
     std::string deviceJson_{"null"};
+    std::string jsonBuffer_;          // reused per send() so serialisation allocates only once
     std::uint64_t packetsSent_{};
     std::uint16_t port_{};
 };

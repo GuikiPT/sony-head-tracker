@@ -24,4 +24,8 @@ std::string jsonEscapeString(std::string_view utf8);
 // JSON value -- either "null" or a quoted string from jsonEscapeString().
 std::string toJson(const MotionSample& sample, std::string_view deviceJson);
 
+// Same serialisation into a caller-owned buffer (cleared first), so per-packet
+// senders can reuse one allocation. toJson() is a thin wrapper over this.
+void toJsonTo(std::string& out, const MotionSample& sample, std::string_view deviceJson);
+
 } // namespace sony

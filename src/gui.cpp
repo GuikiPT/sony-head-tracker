@@ -75,6 +75,14 @@ public:
     std::wstring displayedSimpleStatsText{latestSimpleStatsText}, displayedSimpleHealthText{L"Waiting for the first sample"};
     std::wstring displayedSmoothingText;
     bool rawDirty{}, statsDirty{}, motionDirty{}, simpleStatsDirty{};
+    // Newest data waiting to be turned into display text. Samples arrive at the
+    // packet rate but the readouts refresh at 10 Hz (raw: 5 Hz), so formatting
+    // happens at flush time, from the newest data, instead of per packet.
+    MotionSample pendingSample_{}; bool pendingSampleValid_{};
+    std::vector<std::uint8_t> pendingRawBytes_; bool pendingRawValid_{};
+    // Back buffer for the double-buffered WM_PAINT, cached across frames so the
+    // ~25 fps live-graph repaint doesn't allocate a window-sized bitmap each time.
+    HDC backBufferDc{}; HBITMAP backBufferBmp{}; HGDIOBJ backBufferOld{}; SIZE backBufferSize{};
     std::chrono::steady_clock::time_point lastRawUiUpdate{}, lastTelemetryUiUpdate{}, lastMaintenanceUpdate{};
     UiMode uiMode{UiMode::simple};
     UINT dpi{96};
@@ -91,7 +99,13 @@ public:
     static constexpr COLORREF kOk{RGB(94,214,140)};
     static constexpr COLORREF kWarn{RGB(255,196,86)};
 
-    ~Window(){hid.disconnect();sensors.disconnect();for(auto f:{font,monoFont,telemetryFont,titleFont,sectionFont})if(f)DeleteObject(f);for(auto b:{background,panel,headerBrush})if(b)DeleteObject(b);if(appIcon)DestroyIcon(appIcon);}
+    ~Window(){hid.disconnect();sensors.disconnect();destroyBackBuffer();for(auto f:{font,monoFont,telemetryFont,titleFont,sectionFont})if(f)DeleteObject(f);for(auto b:{background,panel,headerBrush})if(b)DeleteObject(b);if(appIcon)DestroyIcon(appIcon);}
+
+    void destroyBackBuffer(){
+        if(!backBufferDc)return;
+        SelectObject(backBufferDc,backBufferOld);DeleteObject(backBufferBmp);DeleteDC(backBufferDc);
+        backBufferDc=nullptr;backBufferBmp=nullptr;backBufferOld=nullptr;backBufferSize={};
+    }
 
     int px(int value) const { return MulDiv(value,static_cast<int>(dpi),96); }
     void rebuildFonts(){
@@ -127,9 +141,28 @@ public:
         statusText=std::move(text);statusColor=color;
         const auto h=headerRect();InvalidateRect(hwnd,&h,FALSE);
     }
+    // Turns the newest pending sample into the three telemetry strings. Called
+    // on the flush path (and before status overrides), so text is built from
+    // the newest sample exactly when it is about to be shown.
+    void materializeTelemetryTexts(){
+        if(!pendingSampleValid_)return;
+        const auto& f=pendingSample_;
+        latestStatsText=std::format(L"Yaw {:+8.2f}°   Pitch {:+8.2f}°   Roll {:+8.2f}°   Samples/s {:6.1f}   Latency {}",f.euler.yaw,f.euler.pitch,f.euler.roll,f.packetsPerSecond,f.receiveLatencyMs<0?L"     N/A":std::format(L"{:7.2f} ms",f.receiveLatencyMs));statsDirty=true;
+        latestSimpleStatsText=std::format(L"Yaw {:+8.1f}°       Pitch {:+8.1f}°       Roll {:+8.1f}°",f.euler.yaw,f.euler.pitch,f.euler.roll);simpleStatsDirty=true;
+        const auto gyro=f.angularVelocity?std::format(L"X {:+7.2f}  Y {:+7.2f}  Z {:+7.2f}",f.angularVelocity->x,f.angularVelocity->y,f.angularVelocity->z):std::wstring(L"unavailable");
+        const auto accel=f.acceleration?std::format(L"X {:+7.2f}  Y {:+7.2f}  Z {:+7.2f}",f.acceleration->x,f.acceleration->y,f.acceleration->z):std::wstring(L"not reported by this device");
+        latestMotionText=std::format(L"Gyroscope (rad/s)  {}     Accelerometer (m/s²)  {}",gyro,accel);motionDirty=true;
+        pendingSampleValid_=false;
+    }
+    void materializeRawText(){
+        if(!pendingRawValid_)return;
+        latestRawText=L"Raw packet: "+hexDump(pendingRawBytes_);rawDirty=true;
+        pendingRawValid_=false;
+    }
     void flushTelemetryUi(bool force=false){
         const auto now=std::chrono::steady_clock::now();
         if(!force&&lastTelemetryUiUpdate.time_since_epoch().count()&&now-lastTelemetryUiUpdate<std::chrono::milliseconds(100))return;
+        materializeTelemetryTexts();
         if(uiMode==UiMode::advanced){
             if(statsDirty){setTextIfChanged(stats,latestStatsText,displayedStatsText);statsDirty=false;}
             if(motionDirty){setTextIfChanged(motion,latestMotionText,displayedMotionText);motionDirty=false;}
@@ -140,11 +173,12 @@ public:
         if(uiMode!=UiMode::advanced)return;
         const auto now=std::chrono::steady_clock::now();
         if(!force&&lastRawUiUpdate.time_since_epoch().count()&&now-lastRawUiUpdate<std::chrono::milliseconds(200))return;
+        materializeRawText();
         if(rawDirty){setTextIfChanged(raw,latestRawText,displayedRawText);rawDirty=false;}
         lastRawUiUpdate=now;
     }
-    void setStatsNow(std::wstring text){latestStatsText=std::move(text);statsDirty=true;flushTelemetryUi(true);}
-    void setRawNow(std::wstring text){latestRawText=std::move(text);rawDirty=true;flushRawUi(true);}
+    void setStatsNow(std::wstring text){materializeTelemetryTexts();latestStatsText=std::move(text);statsDirty=true;flushTelemetryUi(true);}
+    void setRawNow(std::wstring text){pendingRawValid_=false;latestRawText=std::move(text);rawDirty=true;flushRawUi(true);}
     void enumerate(){
         hid.disconnect();sensors.disconnect();connected=false;devices=hid.enumerate();sensorDevices=sensors.enumerate();
         // Verified trackers first, unverified custom-sensor candidates second,
@@ -233,11 +267,7 @@ public:
     void onSample(std::unique_ptr<MotionSample> s){
         auto filtered=filter.process(std::move(*s));udp.send(filtered);for(int i=0;i<3;++i){history[i].push_back(static_cast<float>(i==0?filtered.euler.yaw:i==1?filtered.euler.pitch:filtered.euler.roll));if(history[i].size()>360)history[i].erase(history[i].begin());}
         lastSampleTime=std::chrono::steady_clock::now();lastPacketsPerSecond=filtered.packetsPerSecond;lastLatencyMs=filtered.receiveLatencyMs;angularVelocityAvailable=filtered.angularVelocity.has_value();
-        latestStatsText=std::format(L"Yaw {:+8.2f}°   Pitch {:+8.2f}°   Roll {:+8.2f}°   Samples/s {:6.1f}   Latency {}",filtered.euler.yaw,filtered.euler.pitch,filtered.euler.roll,filtered.packetsPerSecond,filtered.receiveLatencyMs<0?L"     N/A":std::format(L"{:7.2f} ms",filtered.receiveLatencyMs));statsDirty=true;
-        latestSimpleStatsText=std::format(L"Yaw {:+8.1f}°       Pitch {:+8.1f}°       Roll {:+8.1f}°",filtered.euler.yaw,filtered.euler.pitch,filtered.euler.roll);simpleStatsDirty=true;
-        const auto gyro=filtered.angularVelocity?std::format(L"X {:+7.2f}  Y {:+7.2f}  Z {:+7.2f}",filtered.angularVelocity->x,filtered.angularVelocity->y,filtered.angularVelocity->z):std::wstring(L"unavailable");
-        const auto accel=filtered.acceleration?std::format(L"X {:+7.2f}  Y {:+7.2f}  Z {:+7.2f}",filtered.acceleration->x,filtered.acceleration->y,filtered.acceleration->z):std::wstring(L"not reported by this device");
-        latestMotionText=std::format(L"Gyroscope (rad/s)  {}     Accelerometer (m/s²)  {}",gyro,accel);motionDirty=true;
+        pendingSample_=std::move(filtered);pendingSampleValid_=true;   // text is built at flush time (10 Hz), not per packet
         flushTelemetryUi();
         const auto rect=graphRect();InvalidateRect(hwnd,&rect,FALSE); // repaint only the live graph -- no whole-window flicker
     }
@@ -476,8 +506,18 @@ public:
         PAINTSTRUCT ps{};auto dc=BeginPaint(hwnd,&ps);
         const auto r=clientRect();
         // Double-buffer: build the frame off-screen, then blit once. This is what
-        // eliminates the flicker the live graph used to cause at ~25 fps.
-        HDC mem=CreateCompatibleDC(dc);HBITMAP bmp=CreateCompatibleBitmap(dc,r.right,r.bottom);auto oldBmp=SelectObject(mem,bmp);
+        // eliminates the flicker the live graph used to cause at ~25 fps. The
+        // buffer is cached across frames (recreated on resize) and only the
+        // invalidated region is blitted -- the rest of the screen already shows
+        // exactly these pixels.
+        if(!backBufferDc||backBufferSize.cx!=r.right||backBufferSize.cy!=r.bottom){
+            destroyBackBuffer();
+            backBufferDc=CreateCompatibleDC(dc);
+            backBufferBmp=CreateCompatibleBitmap(dc,std::max<LONG>(r.right,1),std::max<LONG>(r.bottom,1));
+            backBufferOld=SelectObject(backBufferDc,backBufferBmp);
+            backBufferSize={r.right,r.bottom};
+        }
+        HDC mem=backBufferDc;
         FillRect(mem,&r,background);
         paintHeader(mem);
         paintSectionLabel(mem,px(16),px(120),L"TRACKING SETTINGS");
@@ -490,8 +530,8 @@ public:
         }
         paintOutput(mem);
         drawGraph(mem,graphRect());
-        BitBlt(dc,0,0,r.right,r.bottom,mem,0,0,SRCCOPY);
-        SelectObject(mem,oldBmp);DeleteObject(bmp);DeleteDC(mem);
+        const RECT& u=ps.rcPaint;
+        BitBlt(dc,u.left,u.top,u.right-u.left,u.bottom-u.top,mem,u.left,u.top,SRCCOPY);
         EndPaint(hwnd,&ps);
     }
 };
@@ -557,7 +597,7 @@ LRESULT CALLBACK proc(HWND hwnd,UINT msg,WPARAM wp,LPARAM lp){auto* self=reinter
     case WM_HSCROLL:if(reinterpret_cast<HWND>(lp)==self->smoothing){self->applyControls();return 0;}break;
     case WM_HOTKEY:self->filter.recenter();return 0;
     case WM_TIMER:self->onUiTimer();return 0;
-    case kRawMessage:{std::unique_ptr<std::vector<std::uint8_t>> p(reinterpret_cast<std::vector<std::uint8_t>*>(lp));self->latestRawText=L"Raw packet: "+hexDump(*p);self->rawDirty=true;self->flushRawUi();return 0;}
+    case kRawMessage:{std::unique_ptr<std::vector<std::uint8_t>> p(reinterpret_cast<std::vector<std::uint8_t>*>(lp));self->pendingRawBytes_=std::move(*p);self->pendingRawValid_=true;self->flushRawUi();return 0;}
     case kSampleMessage:self->onSample(std::unique_ptr<MotionSample>(reinterpret_cast<MotionSample*>(lp)));return 0;
     case WM_DESTROY:self->persistConfig();UnregisterHotKey(hwnd,1);KillTimer(hwnd,1);PostQuitMessage(0);return 0;}
     return DefWindowProcW(hwnd,msg,wp,lp);

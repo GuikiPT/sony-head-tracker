@@ -170,13 +170,19 @@ bool configureHeadTrackerFeatures(HANDLE handle,PHIDP_PREPARSED_DATA ppd,const H
     for(auto& [id,report]:reports){Logger::instance().write(LogLevel::info,std::format(L"Sending combined feature report {} ({} bytes)",id,report.size()));if(!HidD_SetFeature(handle,report.data(),static_cast<ULONG>(report.size()))){Logger::instance().write(LogLevel::error,std::format(L"SetFeature report {} failed: {}",id,windowsError(GetLastError())));return false;}Logger::instance().write(LogLevel::info,std::format(L"Feature report {} accepted",id));}return !reports.empty();
 }
 
-std::vector<double> usageArray(PHIDP_PREPARSED_DATA ppd, const HIDP_VALUE_CAPS& c, const std::vector<std::uint8_t>& report) {
+// Reads a packed value array into caller-owned scratch buffers so the per-packet
+// read loop performs no heap allocations. Returns false when the parser rejects
+// the field; `values` is cleared in that case.
+bool usageArray(PHIDP_PREPARSED_DATA ppd, const HIDP_VALUE_CAPS& c, const std::vector<std::uint8_t>& report,
+                std::vector<std::uint8_t>& packedScratch, std::vector<double>& values) {
     const auto usage=c.IsRange?c.Range.UsageMin:c.NotRange.Usage;
     const auto bytesCount=static_cast<USHORT>((static_cast<unsigned long long>(c.ReportCount)*c.BitSize+7)/8);
-    std::vector<std::uint8_t> packed(bytesCount);
-    if(HidP_GetUsageValueArray(HidP_Input,c.UsagePage,c.LinkCollection,usage,reinterpret_cast<PCHAR>(packed.data()),bytesCount,ppd,
-        reinterpret_cast<PCHAR>(const_cast<std::uint8_t*>(report.data())),static_cast<ULONG>(report.size())) != HIDP_STATUS_SUCCESS) return {};
-    return decodePackedDescriptorValues(packed,makeField(c,false));
+    packedScratch.assign(bytesCount,0);
+    values.clear();
+    if(HidP_GetUsageValueArray(HidP_Input,c.UsagePage,c.LinkCollection,usage,reinterpret_cast<PCHAR>(packedScratch.data()),bytesCount,ppd,
+        reinterpret_cast<PCHAR>(const_cast<std::uint8_t*>(report.data())),static_cast<ULONG>(report.size())) != HIDP_STATUS_SUCCESS) return false;
+    decodePackedDescriptorValuesInto(values,packedScratch,makeField(c,false));
+    return true;
 }
 
 // Reads a single scaled scalar value, honouring the descriptor's logical/physical
@@ -207,6 +213,9 @@ struct HidBackend::Context {
     std::chrono::steady_clock::time_point rateStart{std::chrono::steady_clock::now()};
     std::uint64_t rateCount{};
     double rate{};
+    // Reused by the reader thread's parse loop so it stays allocation-free.
+    std::vector<std::uint8_t> packedScratch;
+    std::vector<double> valueScratch;
 };
 
 HidBackend::HidBackend() = default;
@@ -293,7 +302,8 @@ bool HidBackend::connect(const DeviceInfo& device, RawCallback raw, SampleCallba
                 const auto usage=field.IsRange?field.Range.UsageMin:field.NotRange.Usage;if(field.UsagePage!=kSensorPage)continue;
                 if(usage==kRotation||usage==kAngularVelocity||usage==kAngularVelocityVector||usage==kAccelerationVector) {
                     // Vector-form fields: a packed array of three values.
-                    const auto values=usageArray(c->ppd.value,field,report);if(values.size()<3)continue;
+                    if(!usageArray(c->ppd.value,field,report,c->packedScratch,c->valueScratch))continue;
+                    const auto& values=c->valueScratch;if(values.size()<3)continue;
                     if(usage==kRotation){s.rotationVector={values[0],values[1],values[2]};gotRotation=true;}
                     else if(usage==kAccelerationVector){accel={values[0],values[1],values[2]};gotAccel=true;}
                     else{gyro={values[0],values[1],values[2]};gotGyro=true;} // 0x0545 / 0x0456
