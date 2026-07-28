@@ -61,8 +61,8 @@ struct FilterConfig {
     double fastMovementRadiansPerSecond{2.5};
     double driftCorrectionPerSecond{0.002};
     // Default convention: YXZ axis order with the X and Z axes inverted. This is
-    // the mapping that yields correct head tracking on the WH-1000XM5. Overridable
-    // via the CLI (--axis-map / --invert) and the GUI controls.
+    // the mapping that yields correct head tracking on the WH-1000XM5 and
+    // WF-1000XM6. Overridable via the CLI (--axis-map / --invert) and the GUI controls.
     AxisMapping axes{{1u, 0u, 2u}, {-1.0, 1.0, -1.0}};
 };
 

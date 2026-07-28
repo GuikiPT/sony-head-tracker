@@ -6,6 +6,24 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Map orientation after calculating relative motion: axis remapping now applies
+  to the head-local relative pose rather than the raw protocol orientation,
+  preventing cross-axis coupling when the headset's arbitrary reference frame
+  differs from the display frame.
+- Track headset reference reset state: detect the protocol's reset counter
+  changes and rebase the filter's center orientation accordingly, so filtering
+  and drift correction survive an arbitrary reference frame change without
+  visible jumps.
+
+### Added
+- Unit tests pinning which head movement becomes which angle: 30-degree
+  rotations about X and Y, plus an end-to-end check that the default axis
+  mapping sends a nod about the device's raw X axis to pitch and nothing else.
+- Tests covering arbitrary tracker reference frames: pure nod/tilt/turn from
+  non-identity centers, recenter at arbitrary pose, reset counter rebase, and
+  axis mapping independence from the arbitrary reference frame.
+
 ## [2.2.0] - 2026-07-11
 
 macOS release. Sony Head Tracker now runs natively on macOS 14 or later, with
