@@ -26,6 +26,7 @@ add_library(sony_head_tracker_core STATIC
     src/hid_descriptor.cpp
     src/app_config.cpp
     src/diagnostics.cpp
+    src/dual_tracker_fusion.cpp
 )
 target_include_directories(sony_head_tracker_core PUBLIC include)
 if(CMAKE_CXX_COMPILER_ID MATCHES "AppleClang|Clang")
@@ -42,6 +43,7 @@ add_executable(sony_head_tracker_tests
     tests/descriptor_tests.cpp
     tests/config_tests.cpp
     tests/diagnostics_tests.cpp
+    tests/dual_tracker_fusion_tests.cpp
 )
 target_link_libraries(sony_head_tracker_tests PRIVATE sony_head_tracker_core)
 add_test(NAME core COMMAND sony_head_tracker_tests)
