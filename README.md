@@ -206,6 +206,7 @@ below will be updated.
 | Sony WH-1000XM6 | community confirmed |
 | Sony WF-1000XM6 | community confirmed |
 | Sony ULT WEAR (WH-ULT900N) | community confirmed |
+| Sony LinkBuds S (WF-LS900N) | community confirmed |
 
 The table above records project-wide compatibility, primarily from the existing
 Windows implementation. The macOS backend uses the same descriptor-defined
@@ -223,7 +224,6 @@ already validated.
 - Sony LinkBuds Open (WF-L910)
 - Sony LinkBuds Fit (WF-LS910N)
 - Sony LinkBuds (WF-L900)
-- Sony LinkBuds S (WF-LS900N)
 
 A candidate model may still need the latest firmware before the sensor appears.
 Install Sony's **Sound Connect** app, connect the headphones, and update before
