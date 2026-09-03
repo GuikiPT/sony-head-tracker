@@ -19,7 +19,7 @@ jobs:
       - name: Delete all existing releases and reset v2.2.0 tag
         env:
           GH_TOKEN: ${{ github.token }}
-          TARGET_SHA: b88744c0b6c5f72632a5559b638be94ee141e926
+          TARGET_SHA: f83d5782f77f5a1043228d635468ea8435a4a2a8
         shell: bash
         run: |
           set -euo pipefail
