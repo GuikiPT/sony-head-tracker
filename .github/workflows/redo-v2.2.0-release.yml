@@ -1,0 +1,27 @@
+name: Redo v2.2.0 release
+
+on:
+  push:
+    branches: [redo-v2.2.0-release]
+
+permissions:
+  contents: write
+
+jobs:
+  retag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Recreate v2.2.0 tag at synced main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: b88744c0b6c5f72632a5559b638be94ee141e926
+        run: |
+          gh release delete v2.2.0 --repo "$GITHUB_REPOSITORY" --cleanup-tag -y || true
+          git config user.name "GuikiPT"
+          git config user.email "72317733+GuikiPT@users.noreply.github.com"
+          git tag -f v2.2.0 "$TARGET_SHA"
+          git push origin refs/tags/v2.2.0 --force
