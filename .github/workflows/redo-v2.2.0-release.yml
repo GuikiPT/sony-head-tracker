@@ -1,4 +1,4 @@
-name: Redo v2.2.0 release
+name: Clean Actions and redo v2.2.0 release
 
 on:
   push:
@@ -6,22 +6,80 @@ on:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
-  retag:
+  cleanup-and-release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
-      - name: Recreate v2.2.0 tag at synced main
+      - name: Delete all existing releases and reset v2.2.0 tag
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: b88744c0b6c5f72632a5559b638be94ee141e926
+        shell: bash
         run: |
-          gh release delete v2.2.0 --repo "$GITHUB_REPOSITORY" --cleanup-tag -y || true
+          set -euo pipefail
+
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[].id' |
+          while read -r release_id; do
+            [ -n "$release_id" ] || continue
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$release_id"
+          done
+
+          gh api -X DELETE "repos/$GITHUB_REPOSITORY/git/refs/tags/v2.2.0" || true
+
           git config user.name "GuikiPT"
           git config user.email "72317733+GuikiPT@users.noreply.github.com"
           git tag -f v2.2.0 "$TARGET_SHA"
           git push origin refs/tags/v2.2.0 --force
+
+      - name: Cancel and delete all previous Actions runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          self="$GITHUB_RUN_ID"
+
+          mapfile -t run_ids < <(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs?per_page=100" --jq '.workflow_runs[].id')
+
+          for id in "${run_ids[@]}"; do
+            [ "$id" = "$self" ] && continue
+            status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq '.status' 2>/dev/null || echo missing)"
+            case "$status" in
+              queued|in_progress|waiting|requested|pending)
+                gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/cancel" >/dev/null 2>&1 || \
+                  gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/force-cancel" >/dev/null 2>&1 || true
+                ;;
+            esac
+          done
+
+          for attempt in $(seq 1 30); do
+            remaining=0
+            for id in "${run_ids[@]}"; do
+              [ "$id" = "$self" ] && continue
+              status="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq '.status' 2>/dev/null || echo missing)"
+              if [ "$status" != "missing" ] && [ "$status" != "completed" ]; then
+                remaining=$((remaining + 1))
+              fi
+            done
+            [ "$remaining" -eq 0 ] && break
+            sleep 2
+          done
+
+          for id in "${run_ids[@]}"; do
+            [ "$id" = "$self" ] && continue
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/actions/runs/$id" >/dev/null 2>&1 || true
+          done
+
+      - name: Dispatch fresh release build from v2.2.0
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh workflow run build.yml --ref v2.2.0
