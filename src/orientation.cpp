@@ -15,15 +15,26 @@ void OrientationFilter::setConfig(FilterConfig config) { config_ = config; }
 void OrientationFilter::recenter() { recenterPending_ = true; }
 
 MotionSample OrientationFilter::process(MotionSample sample) {
-    sample.rotationVector = remap(sample.rotationVector, config_.axes);
     if (sample.angularVelocity) sample.angularVelocity = remap(*sample.angularVelocity, config_.axes);
     if (sample.acceleration) sample.acceleration = remap(*sample.acceleration, config_.axes);
     // Missing angular velocity behaves as zero for the still-detection heuristic,
     // so an orientation-only device simply forgoes drift correction.
     const Vec3 angular = sample.angularVelocity.value_or(Vec3{});
     latestRaw_ = rotationVectorToQuaternion(sample.rotationVector);
-    if (!initialized_) { filtered_ = latestRaw_; center_ = latestRaw_; last_ = sample.receivedAt; initialized_ = true; }
-    if (recenterPending_) { center_ = latestRaw_; drift_ = {}; gyroBias_={}; integratedDrift_={}; recenterPending_ = false; }
+    const auto referenceReset = haveResetCounter_ && sample.resetCounter != lastResetCounter_;
+    lastResetCounter_ = sample.resetCounter;
+    haveResetCounter_ = true;
+    if (!initialized_ || referenceReset) {
+        // Reset counter changes mean the protocol's arbitrary reference frame changed.
+        filtered_ = latestRaw_;
+        center_ = latestRaw_;
+        drift_ = {};
+        gyroBias_ = {};
+        integratedDrift_ = {};
+        last_ = sample.receivedAt;
+        initialized_ = true;
+        recenterPending_ = false;
+    }
     const auto dt = std::clamp(std::chrono::duration<double>(sample.receivedAt - last_).count(), 0.0, 0.1);
     last_ = sample.receivedAt;
     const auto speed = std::sqrt(angular.x*angular.x + angular.y*angular.y + angular.z*angular.z);
@@ -39,7 +50,22 @@ MotionSample OrientationFilter::process(MotionSample sample) {
         integratedDrift_.x+=gyroBias_.x*dt;integratedDrift_.y+=gyroBias_.y*dt;integratedDrift_.z+=gyroBias_.z*dt;
         drift_=rotationVectorToQuaternion(integratedDrift_);
     }
-    sample.orientation = multiply(conjugate(drift_), multiply(conjugate(center_), filtered_));
+    if (recenterPending_) {
+        // Recenter the displayed, filtered pose so the requested pose is neutral immediately.
+        center_ = filtered_;
+        drift_ = {};
+        gyroBias_ = {};
+        integratedDrift_ = {};
+        recenterPending_ = false;
+    }
+    // Head-local motion composes on the right of the absolute protocol orientation,
+    // so inverse(center) * current recovers motion in the captured head frame.
+    const auto relativeRaw = multiply(conjugate(center_), filtered_);
+    // AxisMapping relabels output controls, so apply it to relative motion only. This
+    // intentionally supports its reflection mappings without treating them as bases.
+    const auto mappedRelative = rotationVectorToQuaternion(
+        remap(quaternionToRotationVector(relativeRaw), config_.axes));
+    sample.orientation = multiply(conjugate(drift_), mappedRelative);
     sample.rotationVector = quaternionToRotationVector(sample.orientation);
     sample.euler = quaternionToEulerDegrees(sample.orientation);
     return sample;
